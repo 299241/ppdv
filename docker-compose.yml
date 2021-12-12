@@ -1,0 +1,19 @@
+version: "3"
+services:
+  manager:
+    container_name: ppdv-manager
+    build:
+      context: .
+      dockerfile: ./dataManager/Dockerfile
+    ports: ["5001:8080"]
+    volumes: [./dataManager:/dataManager]
+  visualizer:
+    container_name: ppdv-visualizer
+    build:
+      context: .
+      dockerfile: ./dataVisualizer/Dockerfile
+    ports: ["5002:5000"]
+    volumes: [./dataVisualizer:/dataVisualizer]
+  redis:
+    container_name: ppdv-redis
+    image: "redis:alpine"
