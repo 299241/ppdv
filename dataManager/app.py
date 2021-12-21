@@ -27,10 +27,8 @@ def xd():
 def getData(id):
     resp = requests.get(f'http://tesla.iem.pw.edu.pl:9080/v2/monitor/{id}')
     db.xadd(id, {'data': resp.text})
-    # log.info(f"stream len = {db.xlen(id)}")
-    # if db.xlen(id) > 120:
-    #     # log.info("obcinam")
-    #     db.xtrim(id, 60)
+    if db.xlen(id) > 300:
+        db.xtrim(id, 300)
 
 
 if __name__ == '__main__':

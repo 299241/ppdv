@@ -12,7 +12,7 @@ services:
     build:
       context: .
       dockerfile: ./dataVisualizer/Dockerfile
-    ports: ["5002:5000"]
+    ports: ["5002:8050"]
     volumes: [./dataVisualizer:/dataVisualizer]
   redis:
     container_name: ppdv-redis
