@@ -4,3 +4,4 @@ requests
 pandas
 dash
 dash-bootstrap-components
+dash-daq
