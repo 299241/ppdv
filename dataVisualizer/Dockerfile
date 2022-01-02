@@ -2,7 +2,7 @@ FROM python:3.7
 
 WORKDIR /dataVisualizer
 
-COPY . .
+COPY ./dataVisualizer /dataVisualizer
 
 RUN pip install -r requirements.txt
 

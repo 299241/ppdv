@@ -1,0 +1,6 @@
+flask
+redis
+pandas
+dash
+dash-bootstrap-components
+dash-daq

@@ -28,30 +28,29 @@ def quantile(x, q):
     return np.quantile(x, q)
 
 
-def cos(inp):
-    return inp
-
-
-def full_df():
-    data = db.xrevrange(1, count=50)
+def get_patient_data(id):
     df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
-
+    data = db.xrevrange(id, count=50)
     for j in range(len(data)):
         data_json = json.loads(data[j][1]['data'])
-        df = df.append(pd.json_normalize(data_json['trace']['sensors']))
+        tmp = pd.json_normalize(data_json['trace']['sensors'])
+        tmp['date'] = datetime.utcfromtimestamp(
+            int(data[j][0].split('-')[0])//1000)
+        df = df.append(tmp)
+    return df
 
-    for i in range(2, 7):
-        data = db.xrevrange(i, count=50)
-        for j in range(len(data)):
-            data_json = json.loads(data[j][1]['data'])
-            tmp = pd.json_normalize(data_json['trace']['sensors'])
-            df = df.append(tmp)
+
+def get_statistical_data():
+    df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
+
+    for i in range(1, 7):
+        df = df.append(get_patient_data(i))
     df = df.groupby(['name']).agg({
         'value': [
             'count', 'min', 'max', 'mean', ("rms", rms),
             ("first quartile", lambda x: quantile(x, 0.25)),
-            ("median", lambda x: quantile(x, 0.5)
-             ), ("third quartile", lambda x: quantile(x, 0.75))
+            ("median", lambda x: quantile(x, 0.5)),
+            ("third quartile", lambda x: quantile(x, 0.75))
         ]
     })
     df.columns = [t[1] for t in df.columns.values]
@@ -60,26 +59,19 @@ def full_df():
 
 
 def get_patient_table_data(id):
-    data = db.xrevrange(id, count=10)
-    dates = []
+    df = get_patient_data(id).iloc[:60]
+    cols = ['L0', 'L1', 'L2', 'R0', 'R1', 'R2']
+    new_df = pd.DataFrame(columns=['date', *cols])
 
-    df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
-    for j in range(len(data)):
-        data_json = json.loads(data[j][1]['data'])
-        dates.append(datetime.utcfromtimestamp(
-            int(data[j][0].split('-')[0])//1000))
-        df = df.append(pd.json_normalize(data_json['trace']['sensors']))
-    # df['date'] = dates
-    cols = ['date', 'L0', 'L1', 'L2', 'R0', 'R1', 'R2']
-    new_df = pd.DataFrame(columns=cols)
     for col in cols:
-        sensor_data = df[df['name'] == col][['value', 'anomaly']]
+        sensor_data = df[df['name'] == col][['value', 'anomaly', 'date']]
         for i in range(sensor_data.shape[0]):
             if sensor_data.iloc[i]['anomaly'] != False:
                 sensor_data.iloc[i]['value'] = '!' + \
                     str(sensor_data.iloc[i]['value'])
         sensor_data = sensor_data['value'].tolist()
         new_df[col] = sensor_data
+    dates = df[df['name'] == 'L0'][['date']]['date'].tolist()
     new_df['date'] = dates
     return new_df
 
@@ -98,7 +90,7 @@ app.layout = html.Div(children=[
     html.H1("All patients aggregated statistical data:"),
     dash_table.DataTable(
         id='full-table',
-        columns=[{'name': i, "id": i} for i in full_df().columns]
+        columns=[{'name': i, "id": i} for i in get_statistical_data().columns]
     ),
     dcc.Tabs(id="patients-tabs", value='1', children=[
         dcc.Tab(label='Patient One', value='1'),
@@ -146,21 +138,17 @@ app.layout = html.Div(children=[
             ], multi=True, value=['L0', 'R0']),
             dcc.RangeSlider(id='sensors-graph-time-filter', min=-10,
                             max=0, value=[-10, 0], tooltip={"placement": "bottom"}),
-            dcc.Graph(id='sensors-graph')]),
-
-
-        # wykresik punktowy z samymi anomaliami
-        # wykresik liniowy z możliwością wyboru, które chcemy narysować jednocześnie na jednym wykresie i ograniczeniem czasu (RangeSlider)
+            dcc.Graph(id='sensors-graph')
+        ])
     ])
 ])
 
 
 @app.callback(
     Output('patient-table', 'data'),
-    [Input('patients-tabs', 'value'),
-     Input('my-interval', 'n_intervals')]
+    Input('patients-tabs', 'value')
 )
-def change_tab(val, _):
+def change_tab(val):
     table_data = get_patient_table_data(val)
     return table_data.to_dict('records')
 
@@ -170,7 +158,7 @@ def change_tab(val, _):
     Input('my-interval', 'n_intervals')
 )
 def update_table(_):
-    return full_df().to_dict('records')
+    return get_statistical_data().to_dict('records')
 
 
 @app.callback(
@@ -181,13 +169,9 @@ def update_table(_):
     State('patients-tabs', 'value')
 )
 def update_gauge(_, sensor_name, patient_id):
-    data = db.xrevrange(patient_id, count=1)
-    df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
-    for j in range(len(data)):
-        data_json = json.loads(data[j][1]['data'])
-        df = df.append(pd.json_normalize(data_json['trace']['sensors']))
-    df = df[df['name'] == sensor_name]
-    return df.iloc[0]['value'], f'Sensor Value: {df.iloc[0]["value"]}'
+    df = get_patient_data(patient_id)
+    dff = df[df['name'] == sensor_name]
+    return dff.iloc[0]['value'], f'Sensor Value: {dff.iloc[0]["value"]}'
 
 
 @app.callback(
@@ -207,17 +191,9 @@ def update_name(id):
     State('patients-tabs', 'value')
 )
 def get_anomaly_graph(_, sensor_name, patient_id):
-    data = db.xrevrange(patient_id, count=50)
-    dates = []
+    df = get_patient_data(patient_id)
 
-    df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
-    for j in range(len(data)):
-        data_json = json.loads(data[j][1]['data'])
-        df = df.append(pd.json_normalize(data_json['trace']['sensors']))
-        dates.append(datetime.utcfromtimestamp(
-            int(data[j][0].split('-')[0])//1000))
     df = df[df['name'] == sensor_name]
-    df['date'] = dates
     df = df[df['anomaly'] == True]
 
     if (df.shape[0] == 0):
@@ -233,26 +209,25 @@ def get_anomaly_graph(_, sensor_name, patient_id):
      Input('patients-tabs', 'value'), Input('sensors-graph-filter', 'value'), Input('sensors-graph-time-filter', 'value')]
 )
 def get_sensors_graph(_, patient_id, sensors, time_range):
-    data = db.xrevrange(patient_id, count=50)
-    dates = []
+    # data = db.xrevrange(patient_id, count=50)
+    # dates = []
 
-    df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
-    for j in range(len(data)):
-        data_json = json.loads(data[j][1]['data'])
-        df = df.append(pd.json_normalize(data_json['trace']['sensors']))
-        dates.append(datetime.utcfromtimestamp(
-            int(data[j][0].split('-')[0])//1000))
-
-    now = datetime.utcnow()
-    df['date'] = list(np.repeat(dates, 6))
-
+    # df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
+    # for j in range(len(data)):
+    #     data_json = json.loads(data[j][1]['data'])
+    #     df = df.append(pd.json_normalize(data_json['trace']['sensors']))
+    #     dates.append(datetime.utcfromtimestamp(
+    #         int(data[j][0].split('-')[0])//1000))
+    df = get_patient_data(patient_id)
     df = df.loc[df['name'].isin(sensors)]
 
+    now = datetime.utcnow()
+    # df['date'] = list(np.repeat(dates, 6))
     start_time = pd.to_datetime(now+timedelta(minutes=time_range[0]))
     end_time = pd.to_datetime(now+timedelta(minutes=time_range[1]))
-
     df = df.loc[(df['date'] > start_time) & (df['date'] < end_time)]
-    fig = {'data': [{'x': dates, 'y': df[df['name'] == sensor]['value'].tolist(), 'name': sensor}
+    # log.info(df[df['name'] == 'L0']['value'].tolist())
+    fig = {'data': [{'x': df[df['name'] == sensor]['date'].tolist(), 'y': df[df['name'] == sensor]['value'].tolist(), 'name': sensor}
                     for sensor in sensors]}
     return fig
 

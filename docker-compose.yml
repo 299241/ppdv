@@ -5,7 +5,6 @@ services:
     build:
       context: .
       dockerfile: ./dataManager/Dockerfile
-    ports: ["5001:8080"]
     volumes: [./dataManager:/dataManager]
   visualizer:
     container_name: ppdv-visualizer
