@@ -11,6 +11,7 @@ from dash import dash_table
 import dash_bootstrap_components as dbc
 import dash_daq as daq
 from datetime import datetime, time, timedelta
+from dash.exceptions import PreventUpdate
 
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -37,14 +38,11 @@ def get_patient_data(id):
         tmp['date'] = datetime.utcfromtimestamp(
             int(data[j][0].split('-')[0])//1000)
         df = df.append(tmp)
+    df = df.reset_index(drop=True)
     return df
 
 
-def get_statistical_data():
-    df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
-
-    for i in range(1, 7):
-        df = df.append(get_patient_data(i))
+def get_statistical_data(df):
     df = df.groupby(['name']).agg({
         'value': [
             'count', 'min', 'max', 'mean', ("rms", rms),
@@ -58,13 +56,13 @@ def get_statistical_data():
     return df
 
 
-def get_patient_table_data(id):
-    df = get_patient_data(id).iloc[:60]
+def get_patient_table_data(df):
+    df = df.iloc[:60]
     cols = ['L0', 'L1', 'L2', 'R0', 'R1', 'R2']
-    new_df = pd.DataFrame(columns=['date', *cols])
+    new_df = pd.DataFrame(columns=['date', *cols]) 
 
     for col in cols:
-        sensor_data = df[df['name'] == col][['value', 'anomaly', 'date']]
+        sensor_data = df[df['name'] == col][['value', 'anomaly', 'date']] 
         for i in range(sensor_data.shape[0]):
             if sensor_data.iloc[i]['anomaly'] != False:
                 sensor_data.iloc[i]['value'] = '!' + \
@@ -75,22 +73,23 @@ def get_patient_table_data(id):
     new_df['date'] = dates
     return new_df
 
-
-def get_patient_table_start(val):
-    table_data = get_patient_table_data(val)
-    return table_data
-
-
 app.layout = html.Div(children=[
     dcc.Interval(
-        id='my-interval',
+        id='quick-interval',
         interval=2000,
         disabled=False
     ),
+    dcc.Interval(
+        id='slow-interval',
+        interval=10000,
+        disabled=False
+    ),
+    dcc.Store(id='cached-data'),
+    dcc.Store(id='cached-patient-data'),
     html.H1("All patients aggregated statistical data:"),
     dash_table.DataTable(
         id='full-table',
-        columns=[{'name': i, "id": i} for i in get_statistical_data().columns]
+        columns=[{'name': i, "id": i} for i in ['name', 'count', 'min', 'max', 'mean', 'rms', 'first quartile', 'median', 'third quartile']]
     ),
     dcc.Tabs(id="patients-tabs", value='1', children=[
         dcc.Tab(label='Patient One', value='1'),
@@ -107,8 +106,7 @@ app.layout = html.Div(children=[
                 dash_table.DataTable(
                     id='patient-table',
                     columns=[{'name': i, "id": i}
-                             for i in get_patient_table_start("1").columns],
-                    data=get_patient_table_start("1").to_dict('records')
+                             for i in ["date", "L0", "L1", "L2", "R0", "R1", "R2"]]
                 )
             ),
         ]),
@@ -145,33 +143,59 @@ app.layout = html.Div(children=[
 
 
 @app.callback(
-    Output('patient-table', 'data'),
-    Input('patients-tabs', 'value')
+    Output('cached-data', 'data'),
+    Input('quick-interval', 'n_intervals')
 )
-def change_tab(val):
-    table_data = get_patient_table_data(val)
-    return table_data.to_dict('records')
+def cached_data(_):
+    df = get_patient_data(1)
+    for i in range(2, 7):
+        df.append(get_patient_data(i))
+    return df.to_json()
+
+
+@app.callback(
+    Output('patient-table', 'data'),
+    [Input('patients-tabs', 'value'),
+    Input('cached-patient-data', 'modified_timestamp')],
+    State('cached-patient-data', 'data')
+)
+def change_tab(patient_id, ts, data):
+    if ts is None:
+        raise PreventUpdate
+    return [] if not data else get_patient_table_data(pd.read_json(data)).to_dict('records')
 
 
 @app.callback(
     Output('full-table', 'data'),
-    Input('my-interval', 'n_intervals')
+    Input('slow-interval', 'n_intervals'),
+    State('cached-data', 'data')
 )
-def update_table(_):
-    return get_statistical_data().to_dict('records')
+def update_table(_, data):
+    return [] if not data else get_statistical_data(pd.read_json(data)).to_dict('records')
+
+
+@app.callback(
+    Output('cached-patient-data', 'data'),
+    [Input('quick-interval', 'n_intervals'),
+    Input('patients-tabs', 'value')]
+)
+def cached_patient_data(_, patient_id):
+    return get_patient_data(patient_id).to_json()
 
 
 @app.callback(
     [Output('sensor-value', 'value'),
      Output('sensor-value', 'label')],
-    [Input('my-interval', 'n_intervals'),
+    [Input('cached-patient-data', 'modified_timestamp'),
      Input('sensors-tabs', 'value')],
-    State('patients-tabs', 'value')
+    [State('cached-patient-data', 'data')]
 )
-def update_gauge(_, sensor_name, patient_id):
-    df = get_patient_data(patient_id)
-    dff = df[df['name'] == sensor_name]
-    return dff.iloc[0]['value'], f'Sensor Value: {dff.iloc[0]["value"]}'
+def update_gauge(ts, sensor_name, data):
+    if ts is None:
+        raise PreventUpdate
+    df = pd.read_json(data)
+    value = df[df['name'] == sensor_name].iloc[0]['value']
+    return value, f'Sensor Value: {value}'
 
 
 @app.callback(
@@ -186,15 +210,16 @@ def update_name(id):
 
 @app.callback(
     [Output('anomaly-graph', 'children')],
-    [Input('my-interval', 'n_intervals'),
+    [Input('cached-patient-data', 'modified_timestamp'),
      Input('sensors-tabs', 'value')],
-    State('patients-tabs', 'value')
+    State('cached-patient-data', 'data')
 )
-def get_anomaly_graph(_, sensor_name, patient_id):
-    df = get_patient_data(patient_id)
+def get_anomaly_graph(ts, sensor_name, data):
+    if ts is None:
+        raise PreventUpdate
+    df = pd.read_json(data)
 
-    df = df[df['name'] == sensor_name]
-    df = df[df['anomaly'] == True]
+    df = df[(df['name'] == sensor_name) & (df['anomaly'] == True)]
 
     if (df.shape[0] == 0):
         return [html.H3('no anomaly recorded yet')]
@@ -205,28 +230,21 @@ def get_anomaly_graph(_, sensor_name, patient_id):
 
 @app.callback(
     Output('sensors-graph', 'figure'),
-    [Input('my-interval', 'n_intervals'),
-     Input('patients-tabs', 'value'), Input('sensors-graph-filter', 'value'), Input('sensors-graph-time-filter', 'value')]
+    [Input('cached-patient-data', 'modified_timestamp'),
+     Input('sensors-graph-filter', 'value'), 
+     Input('sensors-graph-time-filter', 'value')],
+     State('cached-patient-data', 'data')
 )
-def get_sensors_graph(_, patient_id, sensors, time_range):
-    # data = db.xrevrange(patient_id, count=50)
-    # dates = []
-
-    # df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
-    # for j in range(len(data)):
-    #     data_json = json.loads(data[j][1]['data'])
-    #     df = df.append(pd.json_normalize(data_json['trace']['sensors']))
-    #     dates.append(datetime.utcfromtimestamp(
-    #         int(data[j][0].split('-')[0])//1000))
-    df = get_patient_data(patient_id)
+def get_sensors_graph(ts, sensors, time_range, data):
+    if ts is None:
+        raise PreventUpdate
+    df = pd.read_json(data)
     df = df.loc[df['name'].isin(sensors)]
 
     now = datetime.utcnow()
-    # df['date'] = list(np.repeat(dates, 6))
     start_time = pd.to_datetime(now+timedelta(minutes=time_range[0]))
     end_time = pd.to_datetime(now+timedelta(minutes=time_range[1]))
     df = df.loc[(df['date'] > start_time) & (df['date'] < end_time)]
-    # log.info(df[df['name'] == 'L0']['value'].tolist())
     fig = {'data': [{'x': df[df['name'] == sensor]['date'].tolist(), 'y': df[df['name'] == sensor]['value'].tolist(), 'name': sensor}
                     for sensor in sensors]}
     return fig
