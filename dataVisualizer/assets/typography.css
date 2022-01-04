@@ -1,0 +1,17 @@
+body {
+  font-family: "Poppins", sans-serif;
+  padding: 1.5em 0 1.5em 0;
+}
+
+h1 {
+  font-size: 32px;
+}
+
+h2 {
+  font-size: 26px;
+}
+
+h3 {
+  font-size: 22px;
+  font-weight: 500;
+}

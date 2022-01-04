@@ -14,7 +14,8 @@ from datetime import datetime, time, timedelta
 from dash.exceptions import PreventUpdate
 
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = dash.Dash(__name__, external_stylesheets=[
+                dbc.themes.BOOTSTRAP, "https://fonts.googleapis.com/css2?family=Poppins:wght@400;500&display=swap"])
 log = app.logger
 
 db = redis.Redis(host='ppdv-redis',
@@ -59,10 +60,10 @@ def get_statistical_data(df):
 def get_patient_table_data(df):
     df = df.iloc[:60]
     cols = ['L0', 'L1', 'L2', 'R0', 'R1', 'R2']
-    new_df = pd.DataFrame(columns=['date', *cols]) 
+    new_df = pd.DataFrame(columns=['date', *cols])
 
     for col in cols:
-        sensor_data = df[df['name'] == col][['value', 'anomaly', 'date']] 
+        sensor_data = df[df['name'] == col][['value', 'anomaly', 'date']]
         for i in range(sensor_data.shape[0]):
             if sensor_data.iloc[i]['anomaly'] != False:
                 sensor_data.iloc[i]['value'] = '!' + \
@@ -73,7 +74,8 @@ def get_patient_table_data(df):
     new_df['date'] = dates
     return new_df
 
-app.layout = html.Div(children=[
+
+app.layout = dbc.Container([
     dcc.Interval(
         id='quick-interval',
         interval=2000,
@@ -86,58 +88,82 @@ app.layout = html.Div(children=[
     ),
     dcc.Store(id='cached-data'),
     dcc.Store(id='cached-patient-data'),
-    html.H1("All patients aggregated statistical data:"),
-    dash_table.DataTable(
-        id='full-table',
-        columns=[{'name': i, "id": i} for i in ['name', 'count', 'min', 'max', 'mean', 'rms', 'first quartile', 'median', 'third quartile']]
-    ),
-    dcc.Tabs(id="patients-tabs", value='1', children=[
-        dcc.Tab(label='Patient One', value='1'),
-        dcc.Tab(label='Patient Two', value='2'),
-        dcc.Tab(label='Patient Three', value='3'),
-        dcc.Tab(label='Patient Four', value='4'),
-        dcc.Tab(label='Patient Five', value='5'),
-        dcc.Tab(label='Patient Six', value='6'),
+    dbc.Card([
+        dbc.CardHeader([html.H1("All patients aggregated statistical data")]),
+        dbc.CardBody([
+            dash_table.DataTable(
+                id='full-table',
+                columns=[{'name': i, "id": i} for i in ['name', 'count', 'min',
+                                                        'max', 'mean', 'rms', 'first quartile', 'median', 'third quartile']]
+            )
+        ])
     ]),
-    html.Div(id='chosen-id', children=[
-        html.Div(id='patient-name'),
-        dbc.Card([
-            dbc.CardBody(
-                dash_table.DataTable(
-                    id='patient-table',
-                    columns=[{'name': i, "id": i}
-                             for i in ["date", "L0", "L1", "L2", "R0", "R1", "R2"]]
-                )
-            ),
+
+    dbc.Card(className='in-card', children=[
+        dbc.CardHeader([
+            dbc.Tabs(id="patients-tabs", active_tab='1', children=[
+                dbc.Tab(label='Patient One', tab_id='1'),
+                dbc.Tab(label='Patient Two', tab_id='2'),
+                dbc.Tab(label='Patient Three', tab_id='3'),
+                dbc.Tab(label='Patient Four', tab_id='4'),
+                dbc.Tab(label='Patient Five', tab_id='5'),
+                dbc.Tab(label='Patient Six', tab_id='6'),
+            ]),
         ]),
-        html.Div(children=[
-            dbc.Card([
-                dcc.Tabs(id="sensors-tabs", value='L0', children=[
-                    dcc.Tab(label='L0', value='L0'),
-                    dcc.Tab(label='L1', value='L1'),
-                    dcc.Tab(label='L2', value='L2'),
-                    dcc.Tab(label='R0', value='R0'),
-                    dcc.Tab(label='R1', value='R1'),
-                    dcc.Tab(label='R2', value='R2'),
+        dbc.CardBody([
+            html.Div(id='patient-name'),
+            dash_table.DataTable(
+                id='patient-table',
+                columns=[{'name': i, "id": i}
+                         for i in ["date", "L0", "L1", "L2", "R0", "R1", "R2"]]
+            ),
+            html.Div(className='in-card', children=[
+                html.H3("Sensors graph"),
+                dbc.Card([
+                    dbc.CardBody([
+                        dcc.Dropdown(id='sensors-graph-filter', options=[
+                            {'value': x, 'label': x} for x in ['L0', 'L1', 'L2', 'R0', 'R1', 'R2']
+                        ], multi=True, value=['L0', 'L1', 'L2', 'R0', 'R1', 'R2']),
+                        dcc.RangeSlider(
+                            id='sensors-graph-time-filter',
+                            className='sensors-graph-time-filter',
+                            min=-10,
+                            max=0,
+                            step=0.5,
+                            value=[-10, 0],
+                            marks={-10: "-10 min", -8: "-8 min", -6: "-6 min", -4: "-4 min", -2: "-2 min", 0: "now"}),
+                        dcc.Graph(id='sensors-graph')
+                    ])
+                ])
+            ]),
+            dbc.Card(className="in-card", children=[
+                dbc.CardHeader([
+                    dbc.Tabs([
+                        dbc.Tab(label='L0', tab_id='L0'),
+                        dbc.Tab(label='L1', tab_id='L1'),
+                        dbc.Tab(label='L2', tab_id='L2'),
+                        dbc.Tab(label='R0', tab_id='R0'),
+                        dbc.Tab(label='R1', tab_id='R1'),
+                        dbc.Tab(label='R2', tab_id='R2'),
+                    ], id="sensors-tabs", active_tab="L0"),
                 ]),
-                daq.Gauge(
-                    id='sensor-value',
-                    label="Sensor Value:",
-                    value=0,
-                    min=0,
-                    max=1023
-                ),
-                html.Div(id='anomaly-graph')
+                dbc.CardBody([
+                    dbc.Row(
+                        [
+                            dbc.Col(daq.Gauge(
+                                id='sensor-value',
+                                label="Sensor Value:",
+                                value=0,
+                                min=0,
+                                max=1023
+                            ), md=4),
+                            dbc.Col(html.Div(id='anomaly-graph'), md=8),
+                        ],
+                        align="center",
+                    )
+                ])
             ])
         ]),
-        html.Div([
-            dcc.Dropdown(id='sensors-graph-filter', options=[
-                {'value': x, 'label': x} for x in ['L0', 'L1', 'L2', 'R0', 'R1', 'R2']
-            ], multi=True, value=['L0', 'R0']),
-            dcc.RangeSlider(id='sensors-graph-time-filter', min=-10,
-                            max=0, value=[-10, 0], tooltip={"placement": "bottom"}),
-            dcc.Graph(id='sensors-graph')
-        ])
     ])
 ])
 
@@ -155,8 +181,8 @@ def cached_data(_):
 
 @app.callback(
     Output('patient-table', 'data'),
-    [Input('patients-tabs', 'value'),
-    Input('cached-patient-data', 'modified_timestamp')],
+    [Input('patients-tabs', 'active_tab'),
+     Input('cached-patient-data', 'modified_timestamp')],
     State('cached-patient-data', 'data')
 )
 def change_tab(patient_id, ts, data):
@@ -177,7 +203,7 @@ def update_table(_, data):
 @app.callback(
     Output('cached-patient-data', 'data'),
     [Input('quick-interval', 'n_intervals'),
-    Input('patients-tabs', 'value')]
+     Input('patients-tabs', 'active_tab')]
 )
 def cached_patient_data(_, patient_id):
     return get_patient_data(patient_id).to_json()
@@ -187,20 +213,22 @@ def cached_patient_data(_, patient_id):
     [Output('sensor-value', 'value'),
      Output('sensor-value', 'label')],
     [Input('cached-patient-data', 'modified_timestamp'),
-     Input('sensors-tabs', 'value')],
+     Input('sensors-tabs', 'active_tab')],
     [State('cached-patient-data', 'data')]
 )
 def update_gauge(ts, sensor_name, data):
     if ts is None:
         raise PreventUpdate
+
     df = pd.read_json(data)
     value = df[df['name'] == sensor_name].iloc[0]['value']
+
     return value, f'Sensor Value: {value}'
 
 
 @app.callback(
     Output('patient-name', 'children'),
-    Input('patients-tabs', 'value')
+    Input('patients-tabs', 'active_tab')
 )
 def update_name(id):
     data = db.xrevrange(id, count=1)
@@ -211,42 +239,47 @@ def update_name(id):
 @app.callback(
     [Output('anomaly-graph', 'children')],
     [Input('cached-patient-data', 'modified_timestamp'),
-     Input('sensors-tabs', 'value')],
+     Input('sensors-tabs', 'active_tab')],
     State('cached-patient-data', 'data')
 )
 def get_anomaly_graph(ts, sensor_name, data):
     if ts is None:
         raise PreventUpdate
-    df = pd.read_json(data)
 
+    df = pd.read_json(data)
     df = df[(df['name'] == sensor_name) & (df['anomaly'] == True)]
 
     if (df.shape[0] == 0):
         return [html.H3('no anomaly recorded yet')]
 
     fig = px.scatter(df[['date', 'value']], x="date", y="value")
+
     return [dcc.Graph(figure=fig)]
 
 
 @app.callback(
     Output('sensors-graph', 'figure'),
     [Input('cached-patient-data', 'modified_timestamp'),
-     Input('sensors-graph-filter', 'value'), 
+     Input('sensors-graph-filter', 'value'),
      Input('sensors-graph-time-filter', 'value')],
-     State('cached-patient-data', 'data')
+    State('cached-patient-data', 'data')
 )
 def get_sensors_graph(ts, sensors, time_range, data):
     if ts is None:
         raise PreventUpdate
+
     df = pd.read_json(data)
     df = df.loc[df['name'].isin(sensors)]
 
     now = datetime.utcnow()
     start_time = pd.to_datetime(now+timedelta(minutes=time_range[0]))
     end_time = pd.to_datetime(now+timedelta(minutes=time_range[1]))
+
     df = df.loc[(df['date'] > start_time) & (df['date'] < end_time)]
+
     fig = {'data': [{'x': df[df['name'] == sensor]['date'].tolist(), 'y': df[df['name'] == sensor]['value'].tolist(), 'name': sensor}
                     for sensor in sensors]}
+
     return fig
 
 
