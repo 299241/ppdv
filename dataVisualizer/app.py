@@ -30,9 +30,14 @@ def quantile(x, q):
     return np.quantile(x, q)
 
 
-def get_patient_data(id):
+def get_patient_data(id, last_ts):
     df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
-    data = db.xrevrange(id, count=50)
+    if last_ts:
+        data = db.xrevrange(id, min=last_ts)
+        if len(data) == 0:
+            raise PreventUpdate
+    else:
+        data = db.xrevrange(id, min=0)
     for j in range(len(data)):
         data_json = json.loads(data[j][1]['data'])
         tmp = pd.json_normalize(data_json['trace']['sensors'])
@@ -40,13 +45,13 @@ def get_patient_data(id):
             int(data[j][0].split('-')[0])//1000)
         df = df.append(tmp)
     df = df.reset_index(drop=True)
-    return df
+    return df, int(data[0][0].split('-')[0])+1
 
 
 def get_statistical_data(df):
-    df = df.groupby(['name']).agg({
+    df = df.groupby(['name']).agg({ 
         'value': [
-            'count', 'min', 'max', 'mean', ("rms", rms),
+            'min', 'max', 'mean', ("rms", rms),
             ("first quartile", lambda x: quantile(x, 0.25)),
             ("median", lambda x: quantile(x, 0.5)),
             ("third quartile", lambda x: quantile(x, 0.75))
@@ -58,20 +63,17 @@ def get_statistical_data(df):
 
 
 def get_patient_table_data(df):
-    df = df.iloc[:60]
     cols = ['L0', 'L1', 'L2', 'R0', 'R1', 'R2']
-    new_df = pd.DataFrame(columns=['date', *cols])
+    new_df = pd.DataFrame(columns=cols)
 
     for col in cols:
-        sensor_data = df[df['name'] == col][['value', 'anomaly', 'date']]
-        for i in range(sensor_data.shape[0]):
-            if sensor_data.iloc[i]['anomaly'] != False:
-                sensor_data.iloc[i]['value'] = '!' + \
-                    str(sensor_data.iloc[i]['value'])
-        sensor_data = sensor_data['value'].tolist()
-        new_df[col] = sensor_data
-    dates = df[df['name'] == 'L0'][['date']]['date'].tolist()
+        sensor_data = df[df['name'] == col][['value', 'anomaly']]
+        new_df[col] = sensor_data['value'][:10].tolist()
+        new_df[f'anomaly_{col}'] = sensor_data['anomaly'][:10].tolist()
+    dates = df[df['name'] == 'L0'][['date']]['date'][:10].tolist()
+    anomalies = df[df['name'] == 'L0'][['anomaly']]['anomaly'][:10].tolist()
     new_df['date'] = dates
+    new_df['anomaly'] = anomalies
     return new_df
 
 
@@ -88,12 +90,14 @@ app.layout = dbc.Container([
     ),
     dcc.Store(id='cached-data'),
     dcc.Store(id='cached-patient-data'),
+    dcc.Store(id='last-cache'),
+    dcc.Store(id='prev-patient'),
     dbc.Card([
         dbc.CardHeader([html.H1("All patients aggregated statistical data")]),
         dbc.CardBody([
             dash_table.DataTable(
                 id='full-table',
-                columns=[{'name': i, "id": i} for i in ['name', 'count', 'min',
+                columns=[{'name': i, "id": i} for i in ['name', 'min',
                                                         'max', 'mean', 'rms', 'first quartile', 'median', 'third quartile']]
             )
         ])
@@ -115,7 +119,29 @@ app.layout = dbc.Container([
             dash_table.DataTable(
                 id='patient-table',
                 columns=[{'name': i, "id": i}
-                         for i in ["date", "L0", "L1", "L2", "R0", "R1", "R2"]]
+                         for i in ["date", "L0", "L1", "L2", "R0", "R1", "R2", "anomaly_L0", "anomaly_L1", "anomaly_L2", "anomaly_R0", "anomaly_R1", "anomaly_R2"]],
+                style_data_conditional=[*[
+                    {
+                        'if': {
+                            'filter_query': '{anomaly_' + col + '} contains true',
+                            'column_id': col
+                        },
+                        'backgroundColor': '#F5DDDC'
+                    } for col in ["L0", "L1", "L2", "R0", "R1", "R2"]],
+                    *[{
+                        'if': {
+                            'filter_query': '{anomaly_' + col + '} contains false',
+                            'column_id': col
+                        },
+                        'backgroundColor': 'rgba(52, 179, 86, {' + col + '} / 1023)'
+                    } for col in ["L0", "L1", "L2", "R0", "R1", "R2"]]
+                ],
+                style_cell_conditional=[
+                    {
+                        'if': {'column_id': col},
+                        'display': 'none'
+                    } for col in ["anomaly_L0", "anomaly_L1", "anomaly_L2", "anomaly_R0", "anomaly_R1", "anomaly_R2"]
+                ]
             ),
             html.Div(className='in-card', children=[
                 html.H3("Sensors graph"),
@@ -170,12 +196,20 @@ app.layout = dbc.Container([
 
 @app.callback(
     Output('cached-data', 'data'),
-    Input('quick-interval', 'n_intervals')
+    Input('quick-interval', 'n_intervals'),
+    [State('last-cache', 'data'),
+    State('cached-data', 'data')]
 )
-def cached_data(_):
-    df = get_patient_data(1)
-    for i in range(2, 7):
-        df.append(get_patient_data(i))
+def cached_data(_, ts, old_df):
+    if old_df is None:
+        df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
+    else:
+        df = pd.read_json(old_df)
+    for i in range(1, 7):
+        df = get_patient_data(i, ts)[0].append(df)
+    df = df.reset_index(drop=True)
+    if df.shape[0] > 10800:
+        df = df[:10800]
     return df.to_json()
 
 
@@ -185,7 +219,7 @@ def cached_data(_):
      Input('cached-patient-data', 'modified_timestamp')],
     State('cached-patient-data', 'data')
 )
-def change_tab(patient_id, ts, data):
+def change_tab(_, ts, data):
     if ts is None:
         raise PreventUpdate
     return [] if not data else get_patient_table_data(pd.read_json(data)).to_dict('records')
@@ -201,12 +235,33 @@ def update_table(_, data):
 
 
 @app.callback(
-    Output('cached-patient-data', 'data'),
+    [Output('cached-patient-data', 'data'),
+    Output('last-cache', 'data'),
+    Output('prev-patient', 'data')],
     [Input('quick-interval', 'n_intervals'),
-     Input('patients-tabs', 'active_tab')]
+     Input('patients-tabs', 'active_tab')],
+    [State('last-cache', 'data'),
+    State('cached-patient-data', 'data'),
+    State('prev-patient', 'data')]
 )
-def cached_patient_data(_, patient_id):
-    return get_patient_data(patient_id).to_json()
+def cached_patient_data(_, patient_id, last_ts, old_df, prev_patient):
+    if prev_patient != patient_id:
+        old_df = None
+        prev_patient = patient_id
+        last_ts = 0
+
+    if old_df is None:
+        df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
+    else:
+        df = pd.read_json(old_df)
+
+    data, ts = get_patient_data(patient_id, last_ts)
+    data = data.append(df)
+    data = data.reset_index(drop=True)
+    if data.shape[0] > 1800:
+        data = data[:1800]
+    
+    return data.to_json(), ts, prev_patient
 
 
 @app.callback(
@@ -219,7 +274,6 @@ def cached_patient_data(_, patient_id):
 def update_gauge(ts, sensor_name, data):
     if ts is None:
         raise PreventUpdate
-
     df = pd.read_json(data)
     value = df[df['name'] == sensor_name].iloc[0]['value']
 
