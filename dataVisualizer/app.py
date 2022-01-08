@@ -10,7 +10,7 @@ from dash.dependencies import Input, Output, State
 from dash import dash_table
 import dash_bootstrap_components as dbc
 import dash_daq as daq
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from dash.exceptions import PreventUpdate
 
 
@@ -32,12 +32,12 @@ def quantile(x, q):
 
 def get_patient_data(id, last_ts):
     df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
-    if last_ts:
+    if last_ts is not None:
         data = db.xrevrange(id, min=last_ts)
         if len(data) == 0:
             raise PreventUpdate
     else:
-        data = db.xrevrange(id, min=0)
+        data = db.xrevrange(id, count=10)
     for j in range(len(data)):
         data_json = json.loads(data[j][1]['data'])
         tmp = pd.json_normalize(data_json['trace']['sensors'])
@@ -49,7 +49,7 @@ def get_patient_data(id, last_ts):
 
 
 def get_statistical_data(df):
-    df = df.groupby(['name']).agg({ 
+    df = df.groupby(['name']).agg({
         'value': [
             'min', 'max', 'mean', ("rms", rms),
             ("first quartile", lambda x: quantile(x, 0.25)),
@@ -133,7 +133,7 @@ app.layout = dbc.Container([
                             'filter_query': '{anomaly_' + col + '} contains false',
                             'column_id': col
                         },
-                        'backgroundColor': 'rgba(52, 179, 86, {' + col + '} / 1023)'
+                        'backgroundColor': 'rgba(52, 179, 86, 0.3)'
                     } for col in ["L0", "L1", "L2", "R0", "R1", "R2"]]
                 ],
                 style_cell_conditional=[
@@ -198,7 +198,7 @@ app.layout = dbc.Container([
     Output('cached-data', 'data'),
     Input('quick-interval', 'n_intervals'),
     [State('last-cache', 'data'),
-    State('cached-data', 'data')]
+     State('cached-data', 'data')]
 )
 def cached_data(_, ts, old_df):
     if old_df is None:
@@ -236,19 +236,19 @@ def update_table(_, data):
 
 @app.callback(
     [Output('cached-patient-data', 'data'),
-    Output('last-cache', 'data'),
-    Output('prev-patient', 'data')],
+     Output('last-cache', 'data'),
+     Output('prev-patient', 'data')],
     [Input('quick-interval', 'n_intervals'),
      Input('patients-tabs', 'active_tab')],
     [State('last-cache', 'data'),
-    State('cached-patient-data', 'data'),
-    State('prev-patient', 'data')]
+     State('cached-patient-data', 'data'),
+     State('prev-patient', 'data')]
 )
 def cached_patient_data(_, patient_id, last_ts, old_df, prev_patient):
     if prev_patient != patient_id:
         old_df = None
         prev_patient = patient_id
-        last_ts = 0
+        last_ts = int(datetime.now().timestamp()*1000-10*60*1000)
 
     if old_df is None:
         df = pd.DataFrame(columns=["anomaly", "id", "name", "value"])
@@ -260,7 +260,7 @@ def cached_patient_data(_, patient_id, last_ts, old_df, prev_patient):
     data = data.reset_index(drop=True)
     if data.shape[0] > 1800:
         data = data[:1800]
-    
+
     return data.to_json(), ts, prev_patient
 
 
